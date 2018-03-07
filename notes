@@ -1,0 +1,18 @@
+	    // Bobbing.
+	    if(move != 0) {
+		    float bobxAmount = 0.2;
+		    float bobxSpeed = 0.2;
+		    bobx = cos(bobxInc += bobxSpeed) * bobxAmount;
+		    if(bobxInc >= 3.141592*2) {
+		    	bobxInc = 0;			// reset X
+		    	// bobyInc = -3.141592;	// stop bobs from getting out of sync through floating point.
+		    }
+
+		    float bobyAmount = 0.2;
+		    float bobySpeed = 0.2;
+		    boby = sin(bobyInc -= bobySpeed) * bobyAmount;
+		    if(bobyInc <= -3.141592) {
+		    	bobyInc = 0;
+		    }
+	    }
+

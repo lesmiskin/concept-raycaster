@@ -1,0 +1,527 @@
+// 	 Implementation sources: http:// 	lodev.org/cgtutor/files/quickcg/quickcg.cpp (verline function)
+// 							 http:// 	lodev.org/cgtutor/raycasting.html
+
+// TODO: Algorithm for moving sprites.
+// TODO: Z-sorting for moving sprites.
+// TODO: Tidy functions for sprite drawing.
+// TODO: Tidy functions for wall drawing.
+
+// TODO: Head bobbing.
+// TODO: Start looking at a certain angle.
+// TODO: Fix 1-pixel border on walls when close-up.
+
+// TODO: Black line between wall corners.
+// TODO: Shot projectile.
+// TODO: Graves.
+
+
+// TODO: Stars turn while turning.
+// TODO: Lightning.
+// TODO: Rain.
+
+
+// TODO: Chunky status bar.
+// TODO: Pushing against wall should have more than {0,0} origin.
+// Badly-drawn CGA wall tiles (simple bricks with mortar). Different colors.
+// Gravestone sprites around the map.
+// Digitised enemy sprite within the map (prop like table and chairs?)
+// Lovecraftian-themed.
+
+// is present at coordinates.
+// if we cast a ray, and we hit a projectile - DRAW IT!
+
+#include <math.h>
+#include <SDL.h>
+#include <time.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include "drawing.h"
+#include "input.h"
+#include "mysdl.h"
+
+#define mapWidth   24
+#define mapHeight  24
+
+typedef struct {
+	char r;
+	char g;
+	char b;
+} Color;
+
+// SPRITES =====================================================
+
+typedef struct {
+  double x;
+  double y;
+  int textureNumber;
+} Sprite;
+
+Uint32 buffer[HEIGHT][WIDTH]; // y-coordinate first because it works per scanline
+
+#define texWidth 32
+#define texHeight 32
+#define numSprites 1
+
+Sprite sprite[numSprites] =
+{
+  {20.5, 11.5, 10}, //green light in front of playerstart
+  //green lights in every room
+  // {18.5,4.5, 10},
+  // {10.0,4.5, 10},
+  // {10.0,12.5,10},
+  // {3.5, 6.5, 10},
+  // {3.5, 20.5,10},
+  // {3.5, 14.5,10},
+  // {14.5,20.5,10},
+
+  // //row of pillars in front of wall: fisheye test
+  // {18.5, 10.5, 9},
+  // {18.5, 11.5, 9},
+  // {18.5, 12.5, 9},
+
+  // //some barrels around the map
+  // {21.5, 1.5, 8},
+  // {15.5, 1.5, 8},
+  // {16.0, 1.8, 8},
+  // {16.2, 1.2, 8},
+  // {3.5,  2.5, 8},
+  // {9.5, 15.5, 8},
+  // {10.0, 15.1,8},
+  // {10.5, 15.8,8},
+};
+
+//1D Zbuffer
+double ZBuffer[WIDTH];
+
+//arrays used to sort the sprites
+int spriteOrder[numSprites];
+double spriteDistance[numSprites];
+
+//function used to sort the sprites
+void combSort(int* order, double* dist, int amount)
+{
+  // int gap = amount;
+  // bool swapped = false;
+  // while(gap > 1 || swapped)
+  // {
+  //   //shrink factor 1.3
+  //   gap = (gap * 10) / 13;
+  //   if(gap == 9 || gap == 10) gap = 11;
+  //   if (gap < 1) gap = 1;
+  //   swapped = false;
+  //   for(int i = 0; i < amount - gap; i++)
+  //   {
+  //     int j = i + gap;
+  //     if(dist[i] < dist[j])
+  //     {
+  //       std::swap(dist[i], dist[j]);
+  //       std::swap(order[i], order[j]);
+  //       swapped = true;
+  //     }
+  //   }
+  // }
+}
+
+// Source: http://sdl.beuc.net/sdl.wiki/Pixel_Access
+Uint32 getPixel(SDL_Surface *surface, int x, int y)
+{
+    int bpp = surface->format->BytesPerPixel;
+    /* Here p is the address to the pixel we want to retrieve */
+    Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+
+    switch(bpp) {
+    case 1:
+        return *p;
+        break;
+
+    case 2:
+        return *(Uint16 *)p;
+        break;
+
+    case 3:
+        if(SDL_BYTEORDER == SDL_BIG_ENDIAN)
+            return p[0] << 16 | p[1] << 8 | p[2];
+        else
+            return p[0] | p[1] << 8 | p[2] << 16;
+        break;
+
+    case 4:
+        return *(Uint32 *)p;
+        break;
+
+    default:
+        return 0;       /* shouldn't happen, but avoids warnings */
+    }
+}
+
+// SPRITES =====================================================
+
+int worldMap[mapWidth][mapHeight] = {
+	{ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	{ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 }
+	// { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,2,2,2,2,2,0,0,0,0,3,0,3,0,3,0,0,0,1 },
+	// { 1,0,0,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,2,0,0,0,2,0,0,0,0,3,0,0,0,3,0,0,0,1 },
+	// { 1,0,0,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,2,2,0,2,2,0,0,0,0,3,0,3,0,3,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,4,4,4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,0,4,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,0,0,0,0,5,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,0,4,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,0,4,4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,4,4,4,4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 },
+	// { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 }
+};
+
+static int h = HEIGHT;
+static int w = WIDTH;
+
+void verLine(int x, int y1, int y2, Color color) {
+	if(y2 < y1) {y1 += y2; y2 = y1 - y2; y1 -= y2;} 	// swap y1 and y2
+	if(y2 < 0 || y1 >= h	|| x < 0 || x >= w) return; 	// no single point of the line is on screen
+	if(y1 < 0) y1 = 0; 									// clip
+	if(y2 >= w) y2 = h - 1; 							// clip
+
+	for(int i=y1; i < y2; i++) {
+		Coord c = { x, i };
+		drawPixel(c, color.r, color.g, color.b);
+	}
+}
+
+Color makeColor(char r, char g, char b) {
+	Color c = { r, g, b };
+	return c;
+}
+
+typedef struct {
+	float x;
+	float y;
+	float angle;
+	float speed;
+} Sprite2;
+
+#define SPRITE_COUNT 1
+
+Sprite2 sprites2[SPRITE_COUNT] = {
+	{ 2.0f, 2.0f, 3.14*2, 0.05f }
+};
+
+
+static float bobx;
+static float bobxInc;
+static float boby;
+static float bobyInc;
+
+float fireballX = 2.0f;
+float fireballY = 2.0f;
+
+int main()
+{
+	double posX = 18, posY = 18;				// x and y start position
+	double dirX = -1, dirY = 0; 			// initial direction vector
+	double planeX = 0, planeY = 0.66; 		// the 2d raycaster version of camera plane
+
+	double time = 0; 		// time of current frame
+	double oldTime = 0; 	// time of previous frame
+
+	initSdl();
+	initDrawing();
+
+	// Blit hand to surface using SDL.
+	SDL_Surface* hand = SDL_LoadBMP("hand.bmp");
+	SDL_Surface* handShoot = SDL_LoadBMP("hand-fire3.bmp");
+	SDL_Surface* fireballImage = SDL_LoadBMP("fireball.bmp");
+
+	while(running) {
+		if(!due(time, 1000 / 24)) continue;
+
+		inputSdl();
+		drawingClearFrame();
+
+		// Update sprite motion.
+		for(int i=0; i < SPRITE_COUNT; i++) {
+			if(sprite2[i].speed == 0) continue;
+			sprite2[i].x += sprite2[i].speed * sin(sprite2[i].angle);
+			sprite2[i].y += sprite2[i].speed * cos(sprite2[i].angle);
+		}
+
+		for(int x = 0; x < w; x++) {
+			// calculate ray position and direction
+			double cameraX = 2 * x / (double)w - 1; // 	x-coordinate in camera space
+			double rayPosX = posX;
+			double rayPosY = posY;
+			double rayDirX = dirX + planeX * cameraX;
+			double rayDirY = dirY + planeY * cameraX;
+
+			// which box of the map we're in
+			int mapX = (int)rayPosX;
+			int mapY = (int)rayPosY;
+
+			// length of ray from current position to next x or y-side
+			double sideDistX;
+			double sideDistY;
+
+			// length of ray from one x or y-side to next x or y-side
+			double deltaDistX = sqrt(1 + (rayDirY * rayDirY) / (rayDirX * rayDirX));
+			double deltaDistY = sqrt(1 + (rayDirX * rayDirX) / (rayDirY * rayDirY));
+			double perpWallDist;
+
+      		// what direction to step in x or y-direction (either +1 or -1)
+			int stepX;
+			int stepY;
+
+			int hit = 0; 	// was there a wall hit?
+			int side; 	// was a NS or a EW wall hit?
+
+			// calculate step and initial sideDist
+			if (rayDirX < 0) {
+				stepX = -1;
+				sideDistX = (rayPosX - mapX) * deltaDistX;
+			} else {
+				stepX = 1;
+				sideDistX = (mapX + 1.0 - rayPosX) * deltaDistX;
+			}
+			if (rayDirY < 0) {
+				stepY = -1;
+				sideDistY = (rayPosY - mapY) * deltaDistY;
+			} else {
+				stepY = 1;
+				sideDistY = (mapY + 1.0 - rayPosY) * deltaDistY;
+			}
+
+			// perform DDA
+			while (hit == 0) {
+				// 	jump to next map square, OR in x-direction, OR in y-direction
+				if (sideDistX < sideDistY) {
+					sideDistX += deltaDistX;
+					mapX += stepX;
+					side = 0;
+				} else {
+					sideDistY += deltaDistY;
+					mapY += stepY;
+					side = 1;
+				}
+				
+				// 	Check if ray has hit a wall
+				if (worldMap[mapX][mapY] > 0) hit = 1;
+			}
+
+			// Calculate distance projected on camera direction (Euclidean distance will give fisheye effect!)
+			if (side == 0) perpWallDist = (mapX - rayPosX + (1 - stepX) / 2) / rayDirX;
+			else		   perpWallDist = (mapY - rayPosY + (1 - stepY) / 2) / rayDirY;
+
+			//SET THE ZBUFFER FOR THE SPRITE CASTING
+			ZBuffer[x] = perpWallDist; //perpendicular distance is used
+
+			// Calculate height of line to draw on screen
+			int lineHeight = (int)(h / perpWallDist);
+
+			// calculate lowest and highest pixel to fill in current stripe
+			int drawStart = -lineHeight / 2 + h / 2;
+			if(drawStart < 0)drawStart = 0;
+			int drawEnd = lineHeight / 2 + h / 2;
+			if(drawEnd >= h)drawEnd = h - 1;
+
+			// choose wall color
+			Color color = { 255, 255, 0 };
+			int block = worldMap[mapX][mapY];
+
+			if(block == 1){
+				color = makeColor(255,0,255);
+				if(side == 1) color = makeColor(128,0,128);
+			}else if(block == 2){
+				color = makeColor(0,255,255);
+				if(side == 1) color = makeColor(0,128,128);
+			}else if(block == 3){
+				color = makeColor(255,255,255);
+				if(side == 1) color = makeColor(192,192,192);
+			}else if(block == 4) {
+				color = makeColor(0,0,255);
+				if(side == 1) color = makeColor(0,0,128);
+			}
+
+			// draw the pixels of the stripe as a vertical line
+			verLine(x, drawStart, drawEnd, color);
+		}
+
+
+
+// ===============================
+
+    //SPRITE CASTING
+    //sort sprites from far to close
+    for(int i = 0; i < numSprites; i++) {
+      spriteOrder[i] = i;
+      spriteDistance[i] = ((posX - fireballX) * (posX - fireballX) + (posY - fireballY) * (posY - fireballY)); //sqrt not taken, unneeded
+//      spriteDistance[i] = ((posX - sprite[i].x) * (posX - sprite[i].x) + (posY - sprite[i].y) * (posY - sprite[i].y)); //sqrt not taken, unneeded
+    }
+    combSort(spriteOrder, spriteDistance, numSprites);
+
+    // Project and draw the sprites
+    for(int i = 0; i < numSprites; i++) {
+      //translate sprite position to relative to camera
+      double spriteX = fireballX - posX;
+      double spriteY = fireballY - posY;
+      // double spriteX = sprite[spriteOrder[i]].x - posX;
+      // double spriteY = sprite[spriteOrder[i]].y - posY;
+
+      double invDet = 1.0 / (planeX * dirY - dirX * planeY); //required for correct matrix multiplication
+
+      double transformX = invDet * (dirY * spriteX - dirX * spriteY);
+      double transformY = invDet * (-planeY * spriteX + planeX * spriteY); //this is actually the depth inside the screen, that what Z is in 3D
+
+      int spriteScreenX = (int)((w / 2) * (1 + transformX / transformY));
+
+      //calculate height of the sprite on screen
+      int spriteHeight = abs((int)h / (transformY)); //using "transformY" instead of the real distance prevents fisheye
+      //calculate lowest and highest pixel to fill in current stripe
+      int drawStartY = -spriteHeight / 2 + h / 2;
+      if(drawStartY < 0) drawStartY = 0;
+      int drawEndY = spriteHeight / 2 + h / 2;
+      if(drawEndY >= h) drawEndY = h - 1;
+
+      //calculate width of the sprite
+      int spriteWidth = abs( (int) (h / (transformY)));
+      int drawStartX = -spriteWidth / 2 + spriteScreenX;
+      if(drawStartX < 0) drawStartX = 0;
+      int drawEndX = spriteWidth / 2 + spriteScreenX;
+      if(drawEndX >= w) drawEndX = w - 1;
+
+      //loop through every vertical stripe of the sprite on screen
+      for(int stripe = drawStartX; stripe < drawEndX; stripe++)
+      {
+        //the conditions in the if are:
+        //1) it's in front of camera plane so you don't see things behind you
+        //2) it's on the screen (left)
+        //3) it's on the screen (right)
+        //4) ZBuffer, with perpendicular distance
+        if(transformY > 0 && stripe > 0 && stripe < w && transformY < ZBuffer[stripe])
+        for(int y = drawStartY; y < drawEndY; y++) //for every pixel of the current stripe
+        {
+          int d = (y) * 256 - h * 128 + spriteHeight * 128; //256 and 128 factors to avoid floats
+          int texX = (int)(256 * (stripe - (-spriteWidth / 2 + spriteScreenX)) * texWidth / spriteWidth) / 256;
+          int texY = ((d * texHeight) / spriteHeight) / 256;
+
+          // get pixel color from image, splitting up RGB components from integer value.
+          Uint32 color = getPixel(fireballImage, texX, texY);
+          char r = (color & 0xFF000000) >> 24;
+          char g = (color & 0x00FF0000) >> 16;
+          char b = (color & 0x0000FF00) >> 8;
+
+          // only draw pixel if not transparent.
+          if((color & 0x000000FF) != 0)  {
+			Coord c = { stripe, y };
+          	drawPixel(c, r,g,b);
+          }
+        }
+      }
+    }
+
+
+// ===============================
+
+
+
+ 		// timing for input and FPS counter
+ 	    oldTime = time;
+	    time = clock();
+	    double frameTime = (time - oldTime) / 1000.0;  // frameTime is the time this frame has taken, in seconds
+
+		drawingFrame();
+
+		if(shooting) {
+			blitSprite(handShoot, 125 + (frameTime * bobx), 130 + (boby * frameTime));
+		}else{
+			blitSprite(hand, 200 + (frameTime * bobx), 190 + (boby * frameTime));
+		}
+
+		updateWindow();
+
+	    // Bobbing.
+	    if(move != 0) {
+		    float bobxAmount = 0.2;
+		    float bobxSpeed = 0.2;
+		    bobx = cos(bobxInc += bobxSpeed) * bobxAmount;
+		    if(bobxInc >= 3.141592*2) {
+		    	bobxInc = 0;			// reset X
+		    }
+
+		    float bobyAmount = 0.2;
+		    float bobySpeed = 0.2;
+		    boby = sin(bobyInc -= bobySpeed) * bobyAmount;
+		    if(bobyInc <= -3.141592) {
+		    	bobyInc = 0;
+		    }
+	    }
+
+    	double moveSpeed = frameTime * 0.003;  // the constant value is in squares/second
+    	double rotSpeed = frameTime * 0.003;   // the constant value is in radians/second
+
+    	// move forward if no wall in front of you
+		if (move == 1) {
+			if(worldMap[(int)(posX + dirX * moveSpeed)][(int)posY] == false) posX += dirX * moveSpeed;
+			if(worldMap[(int)posX][(int)(posY + dirY * moveSpeed)] == false) posY += dirY * moveSpeed;
+		}
+		// move backwards if no wall behind you
+		if (move == -1) {
+			if(worldMap[(int)(posX - dirX * moveSpeed)][(int)posY] == false) posX -= dirX * moveSpeed;
+			if(worldMap[(int)posX][(int)(posY - dirY * moveSpeed)] == false) posY -= dirY * moveSpeed;
+		}
+
+		// rotate to the right
+		if (turn == 1) {
+			// both camera direction and camera plane must be rotated
+			double oldDirX = dirX;
+			dirX = dirX * cos(-rotSpeed) - dirY * sin(-rotSpeed);
+			dirY = oldDirX * sin(-rotSpeed) + dirY * cos(-rotSpeed);
+			double oldPlaneX = planeX;
+			planeX = planeX * cos(-rotSpeed) - planeY * sin(-rotSpeed);
+			planeY = oldPlaneX * sin(-rotSpeed) + planeY * cos(-rotSpeed);
+		}
+		// rotate to the left
+		if (turn == -1) {
+			// both camera direction and camera plane must be rotated
+			double oldDirX = dirX;
+			dirX = dirX * cos(rotSpeed) - dirY * sin(rotSpeed);
+			dirY = oldDirX * sin(rotSpeed) + dirY * cos(rotSpeed);
+			double oldPlaneX = planeX;
+			planeX = planeX * cos(rotSpeed) - planeY * sin(rotSpeed);
+			planeY = oldPlaneX * sin(rotSpeed) + planeY * cos(rotSpeed);
+		}
+	}
+}
+
